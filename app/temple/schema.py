@@ -199,6 +199,104 @@ CREATE TABLE IF NOT EXISTS restoration_events (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_restoration_events_resource ON restoration_events(resource_type,resource_id,id);
+CREATE TABLE IF NOT EXISTS work_phase_templates (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    code TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
+    craft_type TEXT NOT NULL CHECK(craft_type IN ('woodwork','tiling','painting','sculpture','stonework','other')),
+    check_items_json TEXT NOT NULL DEFAULT '[]',
+    required_roles_json TEXT NOT NULL DEFAULT '[]',
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','retired')),
+    created_by TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS restoration_phases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    restoration_campaign_id INTEGER NOT NULL REFERENCES restoration_campaigns(id) ON DELETE CASCADE,
+    template_id INTEGER REFERENCES work_phase_templates(id),
+    code TEXT NOT NULL,
+    name TEXT NOT NULL,
+    craft_type TEXT NOT NULL CHECK(craft_type IN ('woodwork','tiling','painting','sculpture','stonework','other')),
+    sequence_no INTEGER NOT NULL,
+    depends_on_json TEXT NOT NULL DEFAULT '[]',
+    check_items_json TEXT NOT NULL DEFAULT '[]',
+    required_roles_json TEXT NOT NULL DEFAULT '[]',
+    state TEXT NOT NULL DEFAULT 'blocked' CHECK(state IN ('blocked','ready','in_progress','submitted','accepted','rejected')),
+    current_submission_id INTEGER,
+    opened_at TEXT,
+    submitted_at TEXT,
+    accepted_at TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(restoration_campaign_id, code),
+    UNIQUE(restoration_campaign_id, sequence_no)
+);
+CREATE INDEX IF NOT EXISTS idx_restoration_phases_campaign ON restoration_phases(restoration_campaign_id,state,sequence_no);
+CREATE TABLE IF NOT EXISTS phase_submissions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phase_id INTEGER NOT NULL REFERENCES restoration_phases(id) ON DELETE CASCADE,
+    round_no INTEGER NOT NULL,
+    submission_key TEXT NOT NULL,
+    check_items_snapshot_json TEXT NOT NULL,
+    approvers_snapshot_json TEXT NOT NULL,
+    submitted_by TEXT NOT NULL,
+    submitted_at TEXT NOT NULL,
+    notes TEXT NOT NULL DEFAULT '',
+    payload_digest TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','accepted','rejected')),
+    decided_at TEXT,
+    UNIQUE(phase_id, submission_key)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_submissions_phase ON phase_submissions(phase_id,round_no);
+CREATE TABLE IF NOT EXISTS phase_approvals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    submission_id INTEGER NOT NULL REFERENCES phase_submissions(id) ON DELETE CASCADE,
+    approver_key TEXT NOT NULL,
+    approver_role TEXT NOT NULL DEFAULT '',
+    decision TEXT NOT NULL CHECK(decision IN ('approved','rejected','withdrawn')),
+    comment TEXT NOT NULL DEFAULT '',
+    withdrawn_reason TEXT NOT NULL DEFAULT '',
+    decided_at TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1
+);
+CREATE INDEX IF NOT EXISTS idx_phase_approvals_lookup ON phase_approvals(submission_id,approver_key,id);
+CREATE TABLE IF NOT EXISTS phase_defects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    phase_id INTEGER NOT NULL REFERENCES restoration_phases(id) ON DELETE CASCADE,
+    submission_id INTEGER NOT NULL REFERENCES phase_submissions(id) ON DELETE CASCADE,
+    defect_code TEXT NOT NULL,
+    description TEXT NOT NULL,
+    severity TEXT NOT NULL CHECK(severity IN ('minor','major','critical')),
+    state TEXT NOT NULL DEFAULT 'open' CHECK(state IN ('open','rectify_submitted','closed')),
+    raised_by TEXT NOT NULL,
+    raised_at TEXT NOT NULL,
+    rectification_note TEXT NOT NULL DEFAULT '',
+    rectified_by TEXT,
+    rectified_at TEXT,
+    reverify_result TEXT NOT NULL DEFAULT '' CHECK(reverify_result IN ('','passed','failed')),
+    reverify_note TEXT NOT NULL DEFAULT '',
+    reverified_by TEXT,
+    reverified_at TEXT,
+    closed_at TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    UNIQUE(phase_id, defect_code)
+);
+CREATE INDEX IF NOT EXISTS idx_phase_defects_state ON phase_defects(phase_id,state,severity);
+CREATE TABLE IF NOT EXISTS phase_workflow_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    restoration_campaign_id INTEGER REFERENCES restoration_campaigns(id) ON DELETE CASCADE,
+    phase_id INTEGER,
+    submission_id INTEGER,
+    defect_id INTEGER,
+    approval_id INTEGER,
+    event_type TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    detail_json TEXT NOT NULL DEFAULT '{}',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_phase_workflow_chain ON phase_workflow_events(restoration_campaign_id,id);
 '''
 
 

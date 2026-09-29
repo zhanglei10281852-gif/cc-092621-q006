@@ -61,6 +61,14 @@ class TempleRestorationService:
             (restoration_campaign_id,),
         ).fetchall()]
         result["events"] = self._events(connection, "restoration_campaign", restoration_campaign_id)
+        from app.temple.phase_workflow import PhaseWorkflowService
+
+        workflow = PhaseWorkflowService(connection, self.clock).workflow_detail(restoration_campaign_id, connection)
+        result["phases"] = workflow["phases"]
+        result["constructible_phases"] = workflow["constructible_phases"]
+        result["open_defects"] = workflow["open_defects"]
+        result["blocking_defects"] = workflow["blocking_defects"]
+        result["workflow_chain"] = workflow["chain"]
         return result
 
     def list_restoration_campaigns(self, temple_code: str | None = None, state: str | None = None) -> list[dict[str, Any]]:
@@ -107,6 +115,21 @@ class TempleRestorationService:
         restoration_campaign = self._restoration_campaign(restoration_campaign_id)
         if restoration_campaign["state"] not in {"running", "paused"}:
             raise ConflictError("当前发布活动状态不能完成")
+        phase_rows = self.connection.execute(
+            "SELECT state FROM restoration_phases WHERE restoration_campaign_id=?",
+            (restoration_campaign_id,),
+        ).fetchall()
+        if phase_rows:
+            open_defects = self.connection.execute(
+                "SELECT COUNT(*) FROM phase_defects d JOIN restoration_phases p ON p.id=d.phase_id "
+                "WHERE p.restoration_campaign_id=? AND d.state IN ('open','rectify_submitted')",
+                (restoration_campaign_id,),
+            ).fetchone()[0]
+            if open_defects:
+                raise ConflictError("仍有缺陷未闭环，不能结束修缮活动", context={"open_defects": int(open_defects)})
+            unfinished = [row["state"] for row in phase_rows if row["state"] != "accepted"]
+            if unfinished:
+                raise ConflictError("仍有工序未完成验收，不能结束修缮活动", context={"unfinished_states": sorted(set(unfinished))})
         now = to_storage(self.clock.now())
         with transaction(immediate=True) as connection:
             connection.execute("UPDATE restoration_campaigns SET state='completed',ends_at=COALESCE(ends_at,?),updated_at=? WHERE id=?", (now, now, restoration_campaign_id))
