@@ -86,9 +86,12 @@ class TempleRestorationService:
         now = to_storage(self.clock.now())
         if restoration_campaign["starts_at"] and restoration_campaign["starts_at"] > now:
             raise ConflictError("发布活动尚未到开始时间")
+        from app.temple.workmanship import WorkmanshipAcceptanceService
+        workmanship = WorkmanshipAcceptanceService(self.connection, self.clock)
         with transaction(immediate=True) as connection:
             connection.execute("UPDATE restoration_campaigns SET state='running',updated_at=? WHERE id=?", (now, restoration_campaign_id))
             connection.execute("UPDATE restoration_targets SET state='active',activated_at=COALESCE(activated_at,?),version=version+1 WHERE restoration_campaign_id=? AND state IN ('pending','paused')", (now, restoration_campaign_id))
+            workmanship.materialize_campaign(restoration_campaign_id, connection)
             self._event(connection, "restoration_campaign", restoration_campaign_id, "started", actor, {"reason": reason}, now)
             return self.restoration_campaign_detail(restoration_campaign_id, connection)
 
@@ -108,7 +111,10 @@ class TempleRestorationService:
         if restoration_campaign["state"] not in {"running", "paused"}:
             raise ConflictError("当前发布活动状态不能完成")
         now = to_storage(self.clock.now())
+        from app.temple.workmanship import WorkmanshipAcceptanceService
+        workmanship = WorkmanshipAcceptanceService(self.connection, self.clock)
         with transaction(immediate=True) as connection:
+            workmanship.assert_campaign_closable(restoration_campaign_id, connection)
             connection.execute("UPDATE restoration_campaigns SET state='completed',ends_at=COALESCE(ends_at,?),updated_at=? WHERE id=?", (now, now, restoration_campaign_id))
             connection.execute("UPDATE restoration_targets SET state='completed',completed_at=?,version=version+1 WHERE restoration_campaign_id=? AND state IN ('active','paused')", (now, restoration_campaign_id))
             self._event(connection, "restoration_campaign", restoration_campaign_id, "completed", actor, {"reason": reason}, now)
